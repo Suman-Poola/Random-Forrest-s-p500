@@ -17,4 +17,4 @@ This model uses closing price, 1 day lag, two day lag, 3 day lag, 5 day lag, 5 d
 
 Furthur developments must be made to optimize this model. as it had only a 0.2% advantage. 
 
-#This model was developed by Suman Poola
+This model was developed by Suman Poola
