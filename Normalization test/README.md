@@ -1,0 +1,1 @@
+This folder will contain two neural networks, one with the final data frame normalized with the sigma function, and another neural network with the old data frame. Future tests may include different ways to normalize the data. 
