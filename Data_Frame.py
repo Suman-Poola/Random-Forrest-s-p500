@@ -30,7 +30,7 @@ def build_dataset(time_period="36mo"):
     df = yf.download(tickers, period=time_period)
 
     closes = df["Close"]
-    returns = closes.pct_change() * 100
+    returns = closes.pct_change(fill_method=None) * 100
     volumes = df["Volume"]
 
     cs = closes.stack().rename("Close")
@@ -52,16 +52,16 @@ def build_dataset(time_period="36mo"):
     df['Lag 3'] = df.groupby('ticker')['close'].shift(3)
     df['Lag 5'] = df.groupby('ticker')['close'].shift(5)
 
-    df['SMA 5'] = df.groupby('ticker')['close'].rolling(window=5).mean()
-    df['SMA 10'] = df.groupby('ticker')['close'].rolling(window=10).mean()
-    df['SMA 20'] = df.groupby('ticker')['close'].rolling(window=20).mean()
-    df['SMA 30'] = df.groupby('ticker')['close'].rolling(window=30).mean()
-    df['SMA 50'] = df.groupby('ticker')['close'].rolling(window=50).mean()
+    df['SMA 5'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=5).mean())
+    df['SMA 10'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=10).mean())
+    df['SMA 20'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=20).mean())
+    df['SMA 30'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=30).mean())
+    df['SMA 50'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=50).mean())
 
-    df['volatility 5'] = df.groupby('ticker')['return'].rolling(5).std()
-    df['volatility 10'] = df.groupby('ticker')['return'].rolling(10).std()
-    df['volatility 20'] = df.groupby('ticker')['return'].rolling(20).std()
-    df['volatility 30'] = df.groupby('ticker')['return'].rolling(30).std()
+    df['volatility 5'] = df.groupby('ticker')['return'].transform(lambda x: x.rolling(5).std())
+    df['volatility 10'] = df.groupby('ticker')['return'].transform(lambda x: x.rolling(10).std())
+    df['volatility 20'] = df.groupby('ticker')['return'].transform(lambda x: x.rolling(20).std())
+    df['volatility 30'] = df.groupby('ticker')['return'].transform(lambda x: x.rolling(30).std())
 
     df['Price change per volume'] = 1000000 * (df['return'] / df['volume'])
 
