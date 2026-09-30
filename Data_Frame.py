@@ -10,7 +10,6 @@ from sklearn.preprocessing import LabelEncoder
 load_dotenv()
 import kaggle
 
-
 def build_dataset(time_period="36mo"):
     kaggle_username = os.getenv('KAGGLE_USERNAME')
     kaggle_key = os.getenv('KAGGLE_KEY')
@@ -41,12 +40,10 @@ def build_dataset(time_period="36mo"):
     fdf.columns = ['date', 'ticker', 'close', 'return', 'volume']
     fdf = fdf.dropna(subset=['return'])
 
-    # Same ordering as the notebook
     fdf.sort_values(by=['ticker', 'date'], inplace=True)
     fdf.sort_values(['ticker', 'date'], inplace=True)
     df = fdf
 
-    # Lag features
     df['Lag 1'] = df.groupby('ticker')['close'].shift(1)
     df['Lag 2'] = df.groupby('ticker')['close'].shift(2)
     df['Lag 3'] = df.groupby('ticker')['close'].shift(3)
@@ -65,17 +62,20 @@ def build_dataset(time_period="36mo"):
 
     df['Price change per volume'] = 1000000 * (df['return'] / df['volume'])
 
-    df['id'] = LabelEncoder().fit_transform(df['ticker'])
+    ticker_to_id = {ticker: i for i, ticker in enumerate(sorted(df['ticker'].unique()))}
+    df['id'] = df['ticker'].map(ticker_to_id)
+    encoding_table = pd.DataFrame(
+        list(ticker_to_id.items()),
+        columns=['ticker', 'id']
+    )
 
     df['mk cap'] = df['close'] * df['volume'] / 100000000
 
     df = df.dropna()
 
-    
     df['future return'] = df.groupby('ticker')['return'].shift(-1)
     df = df.dropna()
 
-    
     features = [
         'close',
         'return',
@@ -112,4 +112,4 @@ def build_dataset(time_period="36mo"):
     x_test = test[features]
     y_test = test['future return']
 
-    return df, x_test, x_train, y_train, y_test
+    return df, x_test, x_train, y_train, y_test, encoding_table
