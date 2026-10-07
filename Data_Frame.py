@@ -44,16 +44,16 @@ def build_dataset(time_period="36mo"):
     fdf.sort_values(['ticker', 'date'], inplace=True)
     df = fdf
 
-    df['Lag 1'] = df.groupby('ticker')['close'].shift(1)
-    df['Lag 2'] = df.groupby('ticker')['close'].shift(2)
-    df['Lag 3'] = df.groupby('ticker')['close'].shift(3)
-    df['Lag 5'] = df.groupby('ticker')['close'].shift(5)
+    df['Lag 1'] = df.groupby('ticker')['close'].shift(1) / df['close']
+    df['Lag 2'] = df.groupby('ticker')['close'].shift(2) / df['close']
+    df['Lag 3'] = df.groupby('ticker')['close'].shift(3) / df['close']
+    df['Lag 5'] = df.groupby('ticker')['close'].shift(5) / df['close']
 
-    df['SMA 5'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=5).mean())
-    df['SMA 10'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=10).mean())
-    df['SMA 20'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=20).mean())
-    df['SMA 30'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=30).mean())
-    df['SMA 50'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=50).mean())
+    df['SMA 5'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=5).mean()) / df['close']
+    df['SMA 10'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=10).mean()) / df['close']
+    df['SMA 20'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=20).mean()) / df['close']
+    df['SMA 30'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=30).mean()) / df['close']
+    df['SMA 50'] = df.groupby('ticker')['close'].transform(lambda x: x.rolling(window=50).mean()) / df['close']
 
     df['volatility 5'] = df.groupby('ticker')['return'].transform(lambda x: x.rolling(5).std())
     df['volatility 10'] = df.groupby('ticker')['return'].transform(lambda x: x.rolling(10).std())
@@ -77,7 +77,6 @@ def build_dataset(time_period="36mo"):
     df = df.dropna()
 
     features = [
-        'close',
         'return',
         'Lag 1',
         'Lag 2',
