@@ -17,6 +17,23 @@ This model uses closing price, 1 day lag, two day lag, 3 day lag, 5 day lag, 5 d
 
 Furthur developments must be made to optimize this model. as it had only a 0.2% advantage. 
 
+## Validation and model comparison
+
+`Validation.py` has three ways to test a model on the `build_dataset()` frame, all taking `train_pct` (default 0.8):
+
+- `random_split`: shuffled rows. Kept only as a baseline, since training then contains days after the test days.
+- `chronological_split`: one cutoff date for every ticker; train before it, test from it onward. `build_dataset(train_pct=...)` now uses this.
+- `walk_forward`: one-day-ahead validation. Before each test day the model is refit on every earlier day, predicts that day, and the day is added to training. `refit_every=N` refits every N days for slow models.
+
+`Model_Comparison.py` runs every model under all three methods and writes `results/summary.csv` and `results/daily.csv`. `Results_Workbook.py` turns those into `results/Model_Comparison.xlsx`, and also writes `results/paper_table.csv` (the workbook's Paper table sheet): one row per model and split, with the model family, split, refit schedule, normalization, ticker handling, hyperparameters, accuracy and its edge over a naive guess, out-of-sample R², rank IC, long-short Sharpe and t-stats.
+
+```
+python Model_Comparison.py
+python Results_Workbook.py
+```
+
+Without Kaggle credentials, pass `tickers=wikipedia_tickers()` to `build_dataset`; `Model_Comparison.py` does this.
+
 This model was developed by Suman 
 
 The latest version is here:

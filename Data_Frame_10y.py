@@ -1,12 +1,37 @@
+import io
 import pandas as pd
 import os
 from dotenv import load_dotenv
+import requests
 import yfinance as yf
 
-load_dotenv()
-import kaggle
+from Validation import chronological_split
 
-def build_dataset(years=3):
+load_dotenv()
+
+FEATURES = [
+    'return',
+    'Lag 1',
+    'Lag 2',
+    'Lag 3',
+    'Lag 5',
+    'volatility 5',
+    'volatility 10',
+    'volatility 20',
+    'volatility 30',
+    'SMA 10',
+    'SMA 20',
+    'SMA 30',
+    'SMA 50',
+    'volume',
+    'Price change per volume',
+    'id',
+    'mk cap'
+]
+
+def kaggle_tickers():
+    import kaggle
+
     dataset_id = 'darkmatternet/s-and-p-500-stocks-25-years-of-data-updated-daily'
     path = 'ticker_list'
     kaggle.api.dataset_download_cli(
@@ -17,7 +42,19 @@ def build_dataset(years=3):
     )
 
     tk = pd.read_csv('ticker_list/sp500_companies.csv')
-    tickers = tk['symbol'].tolist()
+    return tk['symbol'].tolist()
+
+def wikipedia_tickers():
+    # current S&P 500 constituents, for machines without Kaggle credentials
+    url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+    html = requests.get(url, headers={'User-Agent': 'QF_Indigo research script'}, timeout=30).text
+    table = pd.read_html(io.StringIO(html), attrs={'id': 'constituents'})[0]
+    # yfinance writes share classes with a dash, e.g. BRK-B
+    return table['Symbol'].str.replace('.', '-', regex=False).tolist()
+
+def build_dataset(years=3, train_pct=0.8, tickers=None):
+    if tickers is None:
+        tickers = kaggle_tickers()
 
     df = yf.download(tickers, period="10y")
 
@@ -71,39 +108,12 @@ def build_dataset(years=3):
     # features are computed on all 10 years, then only the last `years` are kept
     df = df[df['date'] > df['date'].max() - pd.DateOffset(years=years)].copy()
 
-    features = [
-        'return',
-        'Lag 1',
-        'Lag 2',
-        'Lag 3',
-        'Lag 5',
-        'volatility 5',
-        'volatility 10',
-        'volatility 20',
-        'volatility 30',
-        'SMA 10',
-        'SMA 20',
-        'SMA 30',
-        'SMA 50',
-        'volume',
-        'Price change per volume',
-        'id',
-        'mk cap'
-    ]
+    # one cutoff date for every ticker, so no training row comes after a test row
+    train, test = chronological_split(df, train_pct)
 
-    train_parts, test_parts = [], []
-
-    for ticker, g in df.groupby('ticker'):
-        split = int(len(g) * 0.8)
-        train_parts.append(g.iloc[:split])
-        test_parts.append(g.iloc[split:])
-
-    train = pd.concat(train_parts)
-    test = pd.concat(test_parts)
-
-    x_train = train[features]
+    x_train = train[FEATURES]
     y_train = train['future return']
-    x_test = test[features]
+    x_test = test[FEATURES]
     y_test = test['future return']
 
     return df, x_test, x_train, y_train, y_test, encoding_table
