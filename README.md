@@ -34,6 +34,23 @@ python Results_Workbook.py
 
 Without Kaggle credentials, pass `tickers=wikipedia_tickers()` to `build_dataset`; `Model_Comparison.py` does this.
 
+Every result also has a cross-sectional accuracy: each day, the share of stocks the model puts on the correct side of that day's median. A coin flip scores 50% whatever the market does, so it compares models fairly even when they predict different targets. `python Model_Comparison.py --rescore` recomputes all metrics from the saved predictions without retraining.
+
+### Improved experiment
+
+`--experiment improved` runs a second set of models built to raise that accuracy, and writes to `results/improved/`:
+
+- `Data_Frame_v2.py` uses all 10 downloaded years instead of 3, the same tickers, and adds overnight gap, intraday return, high-low range, relative volume, sector-relative returns, market return, dispersion, VIX, days since earnings, the last EPS surprise and an earnings-tomorrow flag. Stock-level features are ranked across tickers each day and scaled to [-1, 1]; sector replaces the ticker code.
+- The target is the next-day return minus that day's median (clipped to the day's 1st-99th percentiles for training), so models predict which stocks beat the others instead of where the market goes.
+- `Improved_Models.py` has ridge and logistic regression, a pruned tree, a regularized random forest, early-stopped XGBoost, an XGBoost ranker, a small seed-averaged neural network, an LSTM over 60 days of daily features, two reversal rules as baselines, and an ensemble. Tuning and early stopping only use the last 60 days of each training window.
+
+```
+python Model_Comparison.py --experiment improved --methods Chronological Walk-forward
+python Results_Workbook.py --experiment improved
+```
+
+The improved workbook adds an Original vs improved sheet (also `results/improved/original_vs_improved.csv`) that scores both experiments on the same walk-forward test days.
+
 This model was developed by Suman 
 
 The latest version is here:

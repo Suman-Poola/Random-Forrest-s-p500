@@ -1,16 +1,25 @@
-"""Compares every model under random, chronological, and walk-forward validation.
+"""Compares models under random, chronological, and walk-forward validation.
 
-Each model/validation pair adds a row to results/summary.csv, its per-day scores to
-results/daily.csv, and its predictions to data/predictions/. Pairs already in
-summary.csv are skipped, so an interrupted comparison picks up where it stopped.
-Build the Excel table afterwards with Results_Workbook.py.
+Two experiments share this runner. 'original' is where the notebooks started: the 3-year
+Data_Frame_10y frame, raw features, and models fit to the raw next-day return. 'improved'
+uses Data_Frame_v2 (10 years, features ranked across tickers each day, OHLC, sector,
+market and earnings features), predicts the next-day return minus that day's median, and
+uses the tuned and early-stopped models in Improved_Models.py.
+
+Each model/validation pair adds a row to <out>/summary.csv, its per-day scores to
+<out>/daily.csv, and its predictions to the experiment's predictions folder. Pairs already
+in summary.csv are skipped, so an interrupted comparison picks up where it stopped.
+--rescore recomputes every metric from the saved predictions without retraining.
+Build the Excel tables afterwards with Results_Workbook.py.
 
     python Model_Comparison.py
+    python Model_Comparison.py --experiment improved --methods Chronological Walk-forward
     python Model_Comparison.py --models "Linear Regression" XGBoost --methods Walk-forward
 """
 import argparse
 import os
 import time
+from collections import namedtuple
 
 import numpy as np
 import pandas as pd
@@ -18,14 +27,27 @@ import torch
 import torch.nn as nn
 from sklearn.dummy import DummyRegressor
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeRegressor
 from xgboost import XGBRegressor
 
+import Data_Frame_v2
+import Improved_Models as improved
 from Data_Frame_10y import FEATURES, build_dataset, wikipedia_tickers
 from Validation import chronological_split, daily_scores, holdout, random_split, refit_count, score, walk_forward
 
 METHODS = ['Random', 'Chronological', 'Walk-forward']
+
+# make: builds an unfitted model. refit: walk-forward refit interval in trading days.
+# family, normalization, ticker, inputs: how the model is built, for the paper table.
+# units: 'return' when predictions are returns (so MSE, R² and directional accuracy apply),
+# 'score' when only their order within a day means anything.
+# original: the original experiment's model this one replaces.
+# members: for an ensemble, the models whose daily ranks it averages (make is then None).
+Spec = namedtuple('Spec', ['make', 'refit', 'settings', 'family', 'normalization', 'ticker', 'inputs',
+                           'units', 'original', 'members'], defaults=['return', None, None])
 
 
 class TabularMLP:
@@ -132,86 +154,239 @@ class SequenceLSTM:
                                    for s in range(0, len(rows), 4096)])
 
 
-def model_specs(df):
-    """name -> (factory, walk-forward refit interval in trading days, settings for the workbook)."""
+def original_specs(df):
     return {
-        'Zero forecast': (lambda: DummyRegressor(strategy='constant', constant=0.0), 1,
-                          'Always predicts a 0% return'),
-        'Historical mean': (lambda: DummyRegressor(strategy='mean'), 1,
-                            'Predicts the mean training-set return'),
-        'Linear Regression': (LinearRegression, 1, 'sklearn defaults'),
-        'Decision Tree': (lambda: DecisionTreeRegressor(max_depth=5, random_state=72), 1,
-                          'max_depth=5'),
-        'Random Forest': (lambda: RandomForestRegressor(n_estimators=100, min_samples_leaf=200, max_features=0.33,
-                                                        max_samples=0.5, n_jobs=-1, random_state=72), 5,
-                          'n_estimators=100, min_samples_leaf=200, max_features=0.33, max_samples=0.5'),
-        'XGBoost': (lambda: XGBRegressor(n_estimators=25, max_depth=10, learning_rate=0.05,
-                                         n_jobs=-1, random_state=72), 1,
-                    'n_estimators=25, max_depth=10, learning_rate=0.05'),
-        'Neural Network': (lambda: TabularMLP(), 21,
-                           'fastai tabular_learner, layers=[225,105,75,32,16,1], 5 epochs one-cycle, batch 1024, id embedded'),
-        'LSTM': (lambda: SequenceLSTM(df, FEATURES), 21,
-                 'StockLSTM, 10-day window, hidden 64, id embedding 16, dropout 0.3, Adam 1e-3, 5 epochs, batch 256'),
+        'Zero forecast': Spec(lambda: DummyRegressor(strategy='constant', constant=0.0), 1,
+                              'Always predicts a 0% return', 'Constant baseline', 'n/a (no features)', 'Not used',
+                              'No features'),
+        'Historical mean': Spec(lambda: DummyRegressor(strategy='mean'), 1,
+                                'Predicts the mean training-set return', 'Constant baseline', 'n/a (no features)',
+                                'Not used', 'No features'),
+        'Linear Regression': Spec(LinearRegression, 1, 'sklearn defaults', 'Linear', 'Raw features', 'Numeric code',
+                                  'Day t'),
+        'Decision Tree': Spec(lambda: DecisionTreeRegressor(max_depth=5, random_state=72), 1,
+                              'max_depth=5', 'Single tree', 'Raw features', 'Numeric code', 'Day t'),
+        'Random Forest': Spec(lambda: RandomForestRegressor(n_estimators=100, min_samples_leaf=200, max_features=0.33,
+                                                            max_samples=0.5, n_jobs=-1, random_state=72), 5,
+                              'n_estimators=100, min_samples_leaf=200, max_features=0.33, max_samples=0.5',
+                              'Tree ensemble, bagged', 'Raw features', 'Numeric code', 'Day t'),
+        'XGBoost': Spec(lambda: XGBRegressor(n_estimators=25, max_depth=10, learning_rate=0.05,
+                                             n_jobs=-1, random_state=72), 1,
+                        'n_estimators=25, max_depth=10, learning_rate=0.05',
+                        'Tree ensemble, gradient boosted', 'Raw features', 'Numeric code', 'Day t'),
+        'Neural Network': Spec(lambda: TabularMLP(), 21,
+                               'fastai tabular_learner, layers=[225,105,75,32,16,1], 5 epochs one-cycle, batch 1024, '
+                               'id embedded',
+                               'Feed-forward neural network', 'Z-score, training rows (fastai Normalize)',
+                               'Learned embedding', 'Day t'),
+        'LSTM': Spec(lambda: SequenceLSTM(df, FEATURES), 21,
+                     'StockLSTM, 10-day window, hidden 64, id embedding 16, dropout 0.3, Adam 1e-3, 5 epochs, batch 256',
+                     'Recurrent neural network (LSTM)', 'Z-score, training rows', 'Learned embedding (16-d)',
+                     'Days t-9 to t'),
     }
 
 
-def load_data(path, train_pct):
+XGB_PARAMS = dict(learning_rate=0.03, max_depth=3, subsample=0.7, colsample_bytree=0.7, min_child_weight=500,
+                  reg_lambda=10, tree_method='hist', n_jobs=-1, random_state=72)
+RANKER_PARAMS = dict(objective='rank:pairwise', lambdarank_pair_method='mean', lambdarank_num_pair_per_sample=4,
+                     learning_rate=0.05, max_depth=3, subsample=0.7, colsample_bytree=0.7, tree_method='hist',
+                     n_jobs=-1, random_state=72)
+
+
+def improved_specs(df):
+    dates = df['date']
+    ranked = 'Ranked across tickers each day'
+    scaled = ranked + ', then z-scored on training rows'
+    sector = 'Sector one-hot'
+    learners = ['Ridge Regression', 'Logistic Regression', 'Decision Tree', 'Random Forest', 'XGBoost',
+                'XGBoost Ranker', 'Neural Network', 'LSTM']
+    return {
+        'Zero forecast': Spec(lambda: DummyRegressor(strategy='constant', constant=0.0), 21,
+                              "Always predicts that every stock matches the day's median", 'Constant baseline',
+                              'n/a (no features)', 'Not used', 'No features', original='Zero forecast'),
+        '1-day reversal': Spec(lambda: improved.Rule('return', -1), 21, "Ranks stocks by minus the day's return",
+                               'Rule baseline', ranked, 'Not used', 'Day t', units='score'),
+        '5-day reversal': Spec(lambda: improved.Rule('Lag 5'), 21, 'Ranks stocks by minus the 5-day return',
+                               'Rule baseline', ranked, 'Not used', 'Day t', units='score'),
+        'Ridge Regression': Spec(
+            lambda: improved.Tuned(lambda a: make_pipeline(StandardScaler(), Ridge(alpha=a)), [1e3, 1e5, 1e7], dates),
+            21, 'alpha in {1e3, 1e5, 1e7}, picked by validation IC', 'Linear, L2-penalized', scaled, sector, 'Day t',
+            original='Linear Regression'),
+        'Logistic Regression': Spec(
+            lambda: improved.Tuned(improved.AboveMedianClassifier, [1e-4, 1e-3, 1e-2], dates),
+            21, "Above or below the day's median; C in {1e-4, 1e-3, 1e-2}, picked by validation IC",
+            'Linear classifier', scaled, sector, 'Day t', units='score', original='Linear Regression'),
+        'Decision Tree': Spec(
+            lambda: improved.Tuned(lambda leaf: DecisionTreeRegressor(max_depth=6, min_samples_leaf=leaf,
+                                                                      random_state=72), [1000, 5000, 20000], dates),
+            63, 'max_depth=6, min_samples_leaf in {1000, 5000, 20000}, picked by validation IC', 'Single tree',
+            ranked, sector, 'Day t', original='Decision Tree'),
+        'Random Forest': Spec(
+            lambda: RandomForestRegressor(n_estimators=300, max_depth=6, min_samples_leaf=2000, max_features=0.33,
+                                          max_samples=0.2, n_jobs=-1, random_state=72),
+            21, 'n_estimators=300, max_depth=6, min_samples_leaf=2000, max_features=0.33, max_samples=0.2',
+            'Tree ensemble, bagged', ranked, sector, 'Day t', original='Random Forest'),
+        'XGBoost': Spec(
+            lambda: improved.EarlyStoppedXGB(dates, **XGB_PARAMS),
+            21, 'max_depth=3, learning_rate=0.03, up to 2000 trees by early stopping (patience 100), subsample=0.7, '
+                'colsample_bytree=0.7, min_child_weight=500, reg_lambda=10',
+            'Tree ensemble, gradient boosted', ranked, sector, 'Day t', original='XGBoost'),
+        'XGBoost Ranker': Spec(
+            lambda: improved.DailyRanker(dates, **RANKER_PARAMS),
+            21, 'rank:pairwise on daily target deciles, max_depth=3, learning_rate=0.05, up to 1000 trees by early '
+                'stopping on NDCG@50 (patience 50), subsample=0.7, colsample_bytree=0.7',
+            'Tree ensemble, learning to rank', ranked, sector, 'Day t', units='score'),
+        'Neural Network': Spec(
+            lambda: improved.MLP(dates),
+            63, 'PyTorch, layers 32-16-8 with batch norm, dropout 0.1, Adam 1e-3, weight decay 1e-4, batch 4096, up to '
+                '20 epochs by early stopping (patience 3), average of 5 seeds',
+            'Feed-forward neural network', scaled, sector, 'Day t', original='Neural Network'),
+        'LSTM': Spec(
+            lambda: improved.SequenceLSTM(df, Data_Frame_v2.SEQUENCE_FEATURES, Data_Frame_v2.SECTOR_FEATURES),
+            63, '60-day window of 6 daily features, hidden 32, dropout 0.1, Adam 1e-3, batch 512, 200,000 sampled '
+                'rows per epoch, up to 10 epochs by early stopping (patience 2), average of 3 seeds',
+            'Recurrent neural network (LSTM)', ranked, sector, 'Days t-59 to t', original='LSTM'),
+        'Ensemble': Spec(None, None, 'Equal-weight average of the daily ranks of ' + ', '.join(learners), 'Ensemble',
+                         "n/a (averages the members' ranks)", 'n/a', 'n/a', units='score', members=learners),
+    }
+
+
+def build_improved():
+    # the original run's tickers, so both experiments cover the same stocks
+    tickers = pd.read_parquet(EXPERIMENTS['original']['data'], columns=['ticker'])['ticker'].unique()
+    return Data_Frame_v2.build_dataset(tickers=sorted(tickers))
+
+
+# fit_target is what models train on; score_target is what their predictions are scored against
+EXPERIMENTS = {
+    'original': dict(data='data/dataset_3y.parquet', out='results', predictions='data/predictions',
+                     features=FEATURES, fit_target='future return', score_target='future return',
+                     target='Next-day return', specs=original_specs,
+                     build=lambda: build_dataset(tickers=wikipedia_tickers())[0]),
+    'improved': dict(data='data/dataset_v2.parquet', out='results/improved', predictions='data/predictions_v2',
+                     features=Data_Frame_v2.FEATURES, fit_target='target', score_target='excess return',
+                     target="Next-day return minus the day's median", specs=improved_specs, build=build_improved),
+}
+
+
+def load_data(path, build):
     if os.path.exists(path):
         return pd.read_parquet(path)
-    df, *_ = build_dataset(train_pct=train_pct, tickers=wikipedia_tickers())
+    df = build()
     df.to_parquet(path)
     return df
+
+
+def prediction_path(folder, model, method):
+    return f"{folder}/{model.replace(' ', '_')}_{method}.parquet"
 
 
 def append_csv(frame, path):
     frame.to_csv(path, mode='a', header=not os.path.exists(path), index=False)
 
 
+def ensemble(members, method, folder, target):
+    """Ranks each member's predictions within their day, scales the ranks to [-1, 1], and averages them."""
+    member_predictions = {m: pd.read_parquet(prediction_path(folder, m, method)).set_index(['date', 'ticker'])
+                          for m in members}
+    ranks = pd.concat({m: p['prediction'].groupby(level='date').rank(pct=True)
+                       for m, p in member_predictions.items()}, axis=1)
+    first = member_predictions[members[0]]
+    return first[[target]].assign(prediction=2 * ranks.mean(axis=1) - 1).reset_index()
+
+
+def summary_row(name, method, spec, results, experiment, train_pct, every, refits, seconds):
+    row = {'model': name, 'validation': method, 'refit every (days)': every, 'refits': refits, 'train pct': train_pct,
+           **score(results, experiment['score_target']), 'seconds': round(seconds, 1), 'settings': spec.settings,
+           'family': spec.family, 'normalization': spec.normalization, 'ticker input': spec.ticker,
+           'inputs': spec.inputs, 'units': spec.units, 'original model': spec.original, 'target': experiment['target']}
+    if spec.units == 'score':
+        row.update({'MSE': np.nan, 'MAE': np.nan, 'directional accuracy': np.nan})
+    return row
+
+
+def daily_rows(name, method, spec, results, experiment):
+    daily = daily_scores(results, experiment['score_target']).reset_index().assign(model=name, validation=method)
+    if spec.units == 'score':
+        daily[['MSE', 'accuracy']] = np.nan
+    return daily
+
+
+def rescore(specs, experiment, out, predictions):
+    """Rewrites summary.csv and daily.csv from the saved predictions, keeping each row's run time and refits."""
+    summary_path = os.path.join(out, 'summary.csv')
+    rows, daily = [], []
+    for rec in pd.read_csv(summary_path).to_dict('records'):
+        name, method = rec['model'], rec['validation']
+        results = pd.read_parquet(prediction_path(predictions, name, method))
+        rows.append(summary_row(name, method, specs[name], results, experiment, rec['train pct'],
+                                rec['refit every (days)'], rec['refits'], rec['seconds']))
+        if method != 'Random':
+            daily.append(daily_rows(name, method, specs[name], results, experiment))
+    pd.DataFrame(rows).to_csv(summary_path, index=False)
+    pd.concat(daily).to_csv(os.path.join(out, 'daily.csv'), index=False)
+    print('rescored', len(rows), 'rows in', summary_path)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', default='data/dataset_3y.parquet')
-    parser.add_argument('--out', default='results')
+    parser.add_argument('--experiment', choices=list(EXPERIMENTS), default='original')
+    parser.add_argument('--data', help="defaults to the experiment's data file")
+    parser.add_argument('--out', help="defaults to the experiment's results folder")
+    parser.add_argument('--predictions', help="defaults to the experiment's predictions folder")
     parser.add_argument('--train-pct', type=float, default=0.8)
     parser.add_argument('--models', nargs='*')
     parser.add_argument('--methods', nargs='*', default=METHODS)
+    parser.add_argument('--rescore', action='store_true', help='recompute every metric from the saved predictions')
     args = parser.parse_args()
 
-    os.makedirs(args.out, exist_ok=True)
-    os.makedirs('data/predictions', exist_ok=True)
-    summary_path = os.path.join(args.out, 'summary.csv')
+    experiment = EXPERIMENTS[args.experiment]
+    out = args.out or experiment['out']
+    predictions = args.predictions or experiment['predictions']
+    os.makedirs(out, exist_ok=True)
+    os.makedirs(predictions, exist_ok=True)
+    df = load_data(args.data or experiment['data'], experiment['build'])
+    specs = experiment['specs'](df)
+    if args.rescore:
+        rescore(specs, experiment, out, predictions)
+        return
+
+    summary_path = os.path.join(out, 'summary.csv')
     done = set()
     if os.path.exists(summary_path):
         done = set(pd.read_csv(summary_path)[['model', 'validation']].itertuples(index=False, name=None))
 
-    df = load_data(args.data, args.train_pct)
-    specs = model_specs(df)
+    features, target = experiment['features'], experiment['fit_target']
     for name in args.models or specs:
-        make_model, refit_every, settings = specs[name]
+        spec = specs[name]
         for method in args.methods:
             if (name, method) in done:
                 continue
             start = time.time()
-            if method == 'Random':
-                results = holdout(df, make_model, FEATURES, split=random_split, train_pct=args.train_pct)
+            if spec.members:
+                results = ensemble(spec.members, method, predictions, experiment['score_target'])
+                every, refits = None, None
+            elif method == 'Random':
+                results = holdout(df, spec.make, features, split=random_split, train_pct=args.train_pct, target=target)
                 every, refits = None, 1
             elif method == 'Chronological':
-                results = holdout(df, make_model, FEATURES, split=chronological_split, train_pct=args.train_pct)
+                results = holdout(df, spec.make, features, split=chronological_split, train_pct=args.train_pct,
+                                  target=target)
                 every, refits = None, 1
             else:
-                results = walk_forward(df, make_model, FEATURES, train_pct=args.train_pct, refit_every=refit_every)
-                every, refits = refit_every, refit_count(df, args.train_pct, refit_every)
+                results = walk_forward(df, spec.make, features, train_pct=args.train_pct, refit_every=spec.refit,
+                                       target=target)
+                every, refits = spec.refit, refit_count(df, args.train_pct, spec.refit)
             seconds = time.time() - start
 
-            row = {'model': name, 'validation': method, 'refit every (days)': every, 'refits': refits,
-                   'train pct': args.train_pct, **score(results), 'seconds': round(seconds, 1), 'settings': settings}
+            row = summary_row(name, method, spec, results, experiment, args.train_pct, every, refits, seconds)
             append_csv(pd.DataFrame([row]), summary_path)
             if method != 'Random':
-                daily = daily_scores(results).reset_index().assign(model=name, validation=method)
-                append_csv(daily, os.path.join(args.out, 'daily.csv'))
-            results[['date', 'ticker', 'future return', 'prediction']].to_parquet(
-                f"data/predictions/{name.replace(' ', '_')}_{method}.parquet")
-            print(f"{name:18s} {method:13s} MSE {row['MSE']:.4f}  acc {row['directional accuracy']:.4f}  "
-                  f"IC {row['IC mean']:.4f}  {seconds:.0f}s", flush=True)
+                append_csv(daily_rows(name, method, spec, results, experiment), os.path.join(out, 'daily.csv'))
+            results[['date', 'ticker', experiment['score_target'], 'prediction']].to_parquet(
+                prediction_path(predictions, name, method))
+            print(f"{name:20s} {method:13s} cross-sectional acc {row['cross-sectional accuracy']:.4f}  "
+                  f"acc {row['directional accuracy']:.4f}  IC {row['IC mean']:.4f}  {seconds:.0f}s", flush=True)
 
 
 if __name__ == '__main__':

@@ -68,18 +68,22 @@ def refit_count(df, train_pct=0.8, refit_every=1):
 
 
 def daily_scores(results, target='future return', quantile=0.1):
-    """Per-day MSE, directional accuracy, rank IC, and top-minus-bottom decile return.
+    """Per-day MSE, directional accuracy, cross-sectional accuracy, rank IC, and top-minus-bottom decile return.
 
-    IC is the Spearman correlation between predicted and actual returns across the
-    tickers on that day. The long-short return is the average next-day return of the
-    tickers ranked in the top `quantile` minus that of the bottom `quantile`, before
-    trading costs. Both are undefined for a model that predicts the same value for every row.
+    Cross-sectional accuracy is the share of tickers the model puts on the correct side
+    of the day's median: predicted above its median prediction and actually above the
+    median return, or both below. IC is the Spearman correlation between predicted and
+    actual returns across the tickers on that day. The long-short return is the average
+    next-day return of the tickers ranked in the top `quantile` minus that of the bottom
+    `quantile`, before trading costs. All three are undefined for a model that predicts
+    the same value for every row.
     """
     def one_day(g):
         y, p = g[target], g['prediction']
         scores = {'rows': len(g), 'MSE': ((p - y) ** 2).mean(), 'accuracy': ((p > 0) == (y > 0)).mean(),
-                  'IC': np.nan, 'long-short': np.nan}
+                  'IC': np.nan, 'long-short': np.nan, 'cs accuracy': np.nan}
         if p.nunique() > 1:
+            scores['cs accuracy'] = ((p > p.median()) == (y > y.median())).mean()
             scores['IC'] = p.rank().corr(y.rank())
             k = max(1, int(len(g) * quantile))
             ranked = y[p.sort_values(kind='stable').index]
@@ -104,6 +108,7 @@ def score(results, target='future return'):
         'mean squared return': (y ** 2).mean(),
         'directional accuracy': ((p > 0) == (y > 0)).mean(),
         'share up': (y > 0).mean(),
+        'cross-sectional accuracy': daily['cs accuracy'].mean(),
         'IC mean': daily['IC'].mean(),
         'IC std': daily['IC'].std(),
         'long-short mean': daily['long-short'].mean(),
@@ -112,16 +117,21 @@ def score(results, target='future return'):
 
 
 def daily_edges(results, target='future return'):
-    """Per-day gains over the two simple benchmarks, to t-test across days.
+    """Per-day gains over simple benchmarks, to t-test across days.
 
     'MSE gain' is the zero forecast's MSE minus the model's: the Diebold-Mariano loss
     differential, averaged across tickers each day. 'accuracy edge' is the model's
-    directional accuracy minus that of always guessing the test period's more common direction.
+    directional accuracy minus that of always guessing the test period's more common
+    direction. 'cs edge' is the cross-sectional accuracy minus the 50% of a coin flip,
+    left out on days the model predicts the same value for every ticker.
     """
     y, p = results[target], results['prediction']
     up = (y > 0).mean() >= 0.5
+    by_day = results.groupby('date')
+    correct_side = (p > by_day['prediction'].transform('median')) == (y > by_day[target].transform('median'))
     edges = pd.DataFrame({'date': results['date'], 'MSE gain': y ** 2 - (p - y) ** 2,
-                          'accuracy edge': ((p > 0) == (y > 0)).astype(float) - ((y > 0) == up)})
+                          'accuracy edge': ((p > 0) == (y > 0)).astype(float) - ((y > 0) == up),
+                          'cs edge': (correct_side - 0.5).where(by_day['prediction'].transform('nunique') > 1)})
     return edges.groupby('date').mean()
 
 

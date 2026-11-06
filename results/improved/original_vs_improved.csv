@@ -1,0 +1,13 @@
+﻿Model,Replaces,Days compared,Original cross-sectional accuracy (%),Improved cross-sectional accuracy (%),Original rank IC,Improved rank IC,Original long-short Sharpe,Improved long-short Sharpe,Full-period days,Full-period cross-sectional accuracy (%),Full-period cross-sectional t-stat,Full-period rank IC,Full-period IC t-stat,Full-period long-short Sharpe
+Zero forecast,Zero forecast,151,,,,,,,493,,,,,
+1-day reversal,New model,151,,50.55,,0.0133,,-0.19,493,50.28,0.82,0.0075,0.85,0.31
+5-day reversal,New model,151,,51.05,,0.0275,,1.84,493,50.49,1.39,0.0147,1.6,0.81
+Ridge Regression,Linear Regression,151,50.13,50.82,0.0048,0.0231,0.91,1.62,493,50.56,1.57,0.0167,1.83,1.3
+Logistic Regression,Linear Regression,151,50.13,50.91,0.0048,0.0207,0.91,0.03,493,50.58,2.01,0.0133,1.78,0.47
+Decision Tree,Decision Tree,151,49.91,50.19,-0.0067,0.0068,-0.5,2.68,493,50.1,0.41,0.0011,0.16,1.18
+Random Forest,Random Forest,151,50.33,50.32,0.0054,0.0142,0.43,1.04,493,50.31,0.97,0.0116,1.36,0.76
+XGBoost,XGBoost,151,50.26,50.51,0.0013,0.0137,0.02,1.22,493,50.52,1.62,0.0133,1.65,0.69
+XGBoost Ranker,New model,151,,50.86,,0.0259,,1.13,493,50.68,2.36,0.0164,2.25,0.79
+Neural Network,Neural Network,151,50.34,50.55,0.0059,0.0163,0.85,1.19,493,50.31,1.01,0.0104,1.3,0.79
+LSTM,LSTM,151,50.35,50.83,0.0048,0.0244,0.38,1.55,493,50.68,1.87,0.0201,2.1,1.19
+Ensemble,New model,151,,50.8,,0.0226,,1.37,493,50.57,1.68,0.0158,1.79,1.0
