@@ -1,21 +1,3 @@
-"""Compares models under random, chronological, and walk-forward validation.
-
-Two experiments share this runner. 'original' is where the notebooks started: the 3-year
-Data_Frame_10y frame, raw features, and models fit to the raw next-day return. 'improved'
-uses Data_Frame_v2 (10 years, features ranked across tickers each day, OHLC, sector,
-market and earnings features), predicts the next-day return minus that day's median, and
-uses the tuned and early-stopped models in Improved_Models.py.
-
-Each model/validation pair adds a row to <out>/summary.csv, its per-day scores to
-<out>/daily.csv, and its predictions to the experiment's predictions folder. Pairs already
-in summary.csv are skipped, so an interrupted comparison picks up where it stopped.
---rescore recomputes every metric from the saved predictions without retraining.
-Build the Excel tables afterwards with Results_Workbook.py.
-
-    python Model_Comparison.py
-    python Model_Comparison.py --experiment improved --methods Chronological Walk-forward
-    python Model_Comparison.py --models "Linear Regression" XGBoost --methods Walk-forward
-"""
 import argparse
 import os
 import time
@@ -40,19 +22,12 @@ from Validation import chronological_split, daily_scores, holdout, random_split,
 
 METHODS = ['Random', 'Chronological', 'Walk-forward']
 
-# make: builds an unfitted model. refit: walk-forward refit interval in trading days.
-# family, normalization, ticker, inputs: how the model is built, for the paper table.
-# units: 'return' when predictions are returns (so MSE, R² and directional accuracy apply),
-# 'score' when only their order within a day means anything.
-# original: the original experiment's model this one replaces.
-# members: for an ensemble, the models whose daily ranks it averages (make is then None).
 Spec = namedtuple('Spec', ['make', 'refit', 'settings', 'family', 'normalization', 'ticker', 'inputs',
                            'units', 'original', 'members'], defaults=['return', None, None])
 
 
 class TabularMLP:
-    """Neural_Network.ipynb's fastai tabular learner behind fit/predict."""
-
+    # from Neural_Network.ipynb
     def __init__(self, layers=(225, 105, 75, 32, 16, 1), epochs=5, bs=1024, seed=72):
         self.layers, self.epochs, self.bs, self.seed = layers, epochs, bs, seed
 
@@ -61,8 +36,7 @@ class TabularMLP:
 
         set_seed(self.seed)
         data = X.assign(**{'future return': y.to_numpy()})
-        # fastai needs a validation set; it is only used for its progress metrics here,
-        # so a sample of training rows stands in and all training rows stay in training
+        # fastai needs a validation set
         valid = np.random.default_rng(self.seed).choice(len(data), size=min(5000, len(data)), replace=False)
         self.dls = TabularDataLoaders.from_df(
             data, y_names='future return', cat_names=['id'], cont_names=[c for c in X.columns if c != 'id'],
@@ -103,9 +77,7 @@ class StockLSTM(nn.Module):
 
 
 class SequenceLSTM:
-    """RNN.ipynb's StockLSTM behind fit/predict. Each row is predicted from its ticker's
-    last `window` rows ending on that row's date, so the target is the next day's return."""
-
+    # from RNN.ipynb
     def __init__(self, df, features, window=10, epochs=5, bs=256, lr=1e-3, seed=72):
         df = df.sort_values(['ticker', 'date'])
         self.cont = [f for f in features if f != 'id']
@@ -114,7 +86,6 @@ class SequenceLSTM:
         self.n_tickers = int(self.ids.max()) + 1
         self.index = df.index
         self.epochs, self.bs, self.lr, self.seed = epochs, bs, lr, seed
-        # row positions of each window, repeating a ticker's first row when it has less history
         pos = np.arange(len(df))
         first = pos - df.groupby('ticker').cumcount().to_numpy()
         self.windows = np.maximum(pos[:, None] + np.arange(1 - window, 1), first[:, None])
@@ -127,7 +98,6 @@ class SequenceLSTM:
         torch.manual_seed(self.seed)
         rng = np.random.default_rng(self.seed)
         rows = self.index.get_indexer(X.index)
-        # scale with training rows only
         self.mean = self.values[rows].mean(0)
         self.std = self.values[rows].std(0) + 1e-8
         target = torch.tensor(y.to_numpy(np.float32))
@@ -252,17 +222,15 @@ def improved_specs(df):
 
 
 def build_improved():
-    # the original run's tickers, so both experiments cover the same stocks
     tickers = pd.read_parquet(EXPERIMENTS['original']['data'], columns=['ticker'])['ticker'].unique()
     return Data_Frame_v2.build_dataset(tickers=sorted(tickers))
 
 
-# fit_target is what models train on; score_target is what their predictions are scored against
 EXPERIMENTS = {
     'original': dict(data='data/dataset_3y.parquet', out='results', predictions='data/predictions',
                      features=FEATURES, fit_target='future return', score_target='future return',
                      target='Next-day return', specs=original_specs,
-                     build=lambda: build_dataset(tickers=wikipedia_tickers())[0]),
+                     build=lambda: build_dataset(months=36, tickers=wikipedia_tickers())[0]),  # 3 years
     'improved': dict(data='data/dataset_v2.parquet', out='results/improved', predictions='data/predictions_v2',
                      features=Data_Frame_v2.FEATURES, fit_target='target', score_target='excess return',
                      target="Next-day return minus the day's median", specs=improved_specs, build=build_improved),
@@ -286,7 +254,6 @@ def append_csv(frame, path):
 
 
 def ensemble(members, method, folder, target):
-    """Ranks each member's predictions within their day, scales the ranks to [-1, 1], and averages them."""
     member_predictions = {m: pd.read_parquet(prediction_path(folder, m, method)).set_index(['date', 'ticker'])
                           for m in members}
     ranks = pd.concat({m: p['prediction'].groupby(level='date').rank(pct=True)
@@ -313,7 +280,6 @@ def daily_rows(name, method, spec, results, experiment):
 
 
 def rescore(specs, experiment, out, predictions):
-    """Rewrites summary.csv and daily.csv from the saved predictions, keeping each row's run time and refits."""
     summary_path = os.path.join(out, 'summary.csv')
     rows, daily = [], []
     for rec in pd.read_csv(summary_path).to_dict('records'):

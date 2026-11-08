@@ -1,15 +1,3 @@
-"""Builds Model_Comparison.xlsx and paper_table.csv in an experiment's results folder from the
-CSVs written by Model_Comparison.py.
-
-Values copied from the CSVs are blue; everything derived from them (RMSE, R², edges,
-t-stats, Sharpe ratios, the comparison grids and the monthly tables) is an Excel
-formula, so the workbook recalculates if a value is changed. The Paper table and
-Original vs improved sheets are the exception: they hold plain values, the same as their
-CSVs, for copying into a paper.
-
-    python Results_Workbook.py
-    python Results_Workbook.py --experiment improved
-"""
 import argparse
 import os
 
@@ -43,8 +31,6 @@ MSE_FMT = '0.0000'
 IC_FMT = '0.0000'
 RATIO = '0.00'
 
-# Summary sheet columns: (header, key in summary.csv or None for a formula, number format, formula).
-# Models that output scores rather than returns have no MSE or directional accuracy, hence the ISNUMBER checks.
 SUMMARY_COLUMNS = [
     ('Model', 'model', None, None),
     ('Validation', 'validation', None, None),
@@ -76,13 +62,11 @@ SUMMARY_COLUMNS = [
 SUMMARY_HEADER_ROW = 4
 COL = {header: get_column_letter(i + 1) for i, (header, *_) in enumerate(SUMMARY_COLUMNS)}
 
-# validation method: (description, whether training rows can come after test rows)
 SPLITS = {
     'Random': ('Random 80/20, shuffled rows', 'Yes'),
     'Chronological': ('Chronological 80/20, one fit', 'No'),
     'Walk-forward': ('Walk-forward, expanding window', 'No'),
 }
-# Paper table numeric columns: (Excel number format, decimals in paper_table.csv)
 PAPER_FORMATS = {
     'Model fits': ('#,##0', 0),
     'Test rows': ('#,##0', 0),
@@ -101,7 +85,6 @@ PAPER_FORMATS = {
     'Long-short Sharpe, annualized': ('0.00', 2),
     'Run time (s)': ('#,##0.0', 1),
 }
-# Original vs improved numeric columns, as above
 COMPARISON_FORMATS = {
     'Days compared': ('#,##0', 0),
     'Original cross-sectional accuracy (%)': ('0.00', 2),
@@ -118,7 +101,6 @@ COMPARISON_FORMATS = {
     'Full-period long-short Sharpe': ('0.00', 2),
 }
 
-# Setup sheet rows that differ between the experiments: (data rows, caveat rows)
 SETUP_NOTES = {
     'original': (
         [('Ticker universe', '{tickers} current S&P 500 constituents, list taken from Wikipedia on the run date '
@@ -167,7 +149,6 @@ SETUP_NOTES = {
     ),
 }
 
-# Paper table notes that differ between the experiments
 PAPER_NOTES = {
     'original': [
         ('Feature normalization', 'Linear regression and tree predictions do not change when features are rescaled, so '
@@ -425,9 +406,6 @@ def write_setup(ws, summary, df, experiment_name):
 
 
 def paper_table(summary, df, predictions, target):
-    """One row per model and validation method: how the model was set up and its main test
-    metrics. The accuracy, cross-sectional accuracy and Diebold-Mariano t-stats come from
-    the saved predictions."""
     days = df['date'].nunique()
     rows = []
     for rec in summary.to_dict('records'):
@@ -480,9 +458,6 @@ def paper_table(summary, df, predictions, target):
 
 
 def original_vs_improved(summary, daily, original_daily):
-    """Each improved model's walk-forward results next to those of the original model it
-    replaces, both scored on the original experiment's test days, plus the improved model's
-    results over its own (longer) test period."""
     walk = lambda frame: frame[frame['validation'] == 'Walk-forward']
     sharpe = lambda days: days['long-short'].mean() / days['long-short'].std() * np.sqrt(252)
     improved, original = walk(daily), walk(original_daily)

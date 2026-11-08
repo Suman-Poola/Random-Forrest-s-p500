@@ -45,14 +45,12 @@ def kaggle_tickers():
     return tk['symbol'].tolist()
 
 def wikipedia_tickers():
-    # current S&P 500 constituents, for machines without Kaggle credentials
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
     html = requests.get(url, headers={'User-Agent': 'QF_Indigo research script'}, timeout=30).text
     table = pd.read_html(io.StringIO(html), attrs={'id': 'constituents'})[0]
-    # yfinance writes share classes with a dash, e.g. BRK-B
     return table['Symbol'].str.replace('.', '-', regex=False).tolist()
 
-def build_dataset(years=3, train_pct=0.8, tickers=None):
+def build_dataset(months=3, train_pct=0.8, tickers=None):
     if tickers is None:
         tickers = kaggle_tickers()
 
@@ -105,10 +103,8 @@ def build_dataset(years=3, train_pct=0.8, tickers=None):
     df['future return'] = df.groupby('ticker')['return'].shift(-1)
     df = df.dropna()
 
-    # features are computed on all 10 years, then only the last `years` are kept
-    df = df[df['date'] > df['date'].max() - pd.DateOffset(years=years)].copy()
+    df = df[df['date'] > df['date'].max() - pd.DateOffset(months=months)].copy()
 
-    # one cutoff date for every ticker, so no training row comes after a test row
     train, test = chronological_split(df, train_pct)
 
     x_train = train[FEATURES]

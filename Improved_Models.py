@@ -1,10 +1,3 @@
-"""Models for the improved experiment (Model_Comparison.py --experiment improved).
-
-They train on Data_Frame_v2's 'target' and features through sklearn-style fit(X, y) and
-predict(X). Models that are tuned or stopped early hold out the last VALIDATION_DAYS
-trading days of each training window for it, so the test days never choose a setting.
-Models that need each row's date get the data frame's 'date' column, matched by index.
-"""
 import numpy as np
 import pandas as pd
 import torch
@@ -18,7 +11,6 @@ VALIDATION_DAYS = 60
 
 
 def recent_days(dates, days=VALIDATION_DAYS):
-    """Mask of the rows dated within the last `days` trading days of `dates`."""
     cutoff = np.sort(dates.unique())[-days]
     return (dates >= cutoff).to_numpy()
 
@@ -29,8 +21,6 @@ def mean_daily_ic(dates, y, p):
 
 
 class Rule:
-    """Ranks stocks by one feature, reversed when sign is -1. Nothing is fitted."""
-
     def __init__(self, feature, sign=1):
         self.feature, self.sign = feature, sign
 
@@ -42,9 +32,6 @@ class Rule:
 
 
 class Tuned:
-    """Fits make(setting) for each setting on the training rows before the validation days,
-    keeps the one with the highest mean daily rank IC on those days, and refits it on every row."""
-
     def __init__(self, make, settings, dates):
         self.make, self.settings, self.dates = make, settings, dates
 
@@ -62,9 +49,6 @@ class Tuned:
 
 
 class AboveMedianClassifier:
-    """Logistic regression on whether the target is above 0, i.e. above the day's median.
-    Predicts the probability minus 0.5."""
-
     def __init__(self, C):
         self.model = make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=300))
 
@@ -77,9 +61,6 @@ class AboveMedianClassifier:
 
 
 class EarlyStoppedXGB:
-    """XGBoost regression whose number of trees is chosen by early stopping on the
-    validation days; that many trees are then refit on every training row."""
-
     def __init__(self, dates, max_rounds=2000, patience=100, **params):
         self.dates, self.max_rounds, self.patience, self.params = dates, max_rounds, patience, params
 
@@ -96,10 +77,6 @@ class EarlyStoppedXGB:
 
 
 class DailyRanker:
-    """XGBoost learning to rank: each trading day is one query and each row's label is its
-    target decile that day, so the trees learn which stocks beat the others. The number of
-    trees is chosen by early stopping on the validation days (NDCG of the top 50), then refit."""
-
     def __init__(self, dates, max_rounds=1000, patience=50, **params):
         self.dates, self.max_rounds, self.patience, self.params = dates, max_rounds, patience, params
 
@@ -124,9 +101,6 @@ class DailyRanker:
 
 def train_early_stopped(net, forward, target, train_rows, val_rows, seed, lr, weight_decay, bs, max_epochs,
                         patience, samples_per_epoch=None):
-    """Adam on squared error over `train_rows`, reshuffled each epoch (or a fresh sample of
-    `samples_per_epoch` of them). Stops after `patience` epochs without a lower validation
-    loss and returns the network with its best weights. forward(net, rows) gives predictions."""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
@@ -136,7 +110,7 @@ def train_early_stopped(net, forward, target, train_rows, val_rows, seed, lr, we
         rows = rng.permutation(train_rows)[:samples_per_epoch]
         for start in range(0, len(rows), bs):
             batch = rows[start:start + bs]
-            if len(batch) < 2:  # batch norm needs two rows
+            if len(batch) < 2:  # batchnorm breaks on 1 row
                 continue
             optimizer.zero_grad()
             loss = ((forward(net, batch) - target[batch]) ** 2).mean()
@@ -157,10 +131,6 @@ def train_early_stopped(net, forward, target, train_rows, val_rows, seed, lr, we
 
 
 class MLP:
-    """Feed-forward network: inputs z-scored with the training rows' mean and std, hidden
-    layers with batch norm, ReLU and dropout, Adam with weight decay, and early stopping on
-    the validation days. Predictions average `seeds` networks trained from different seeds."""
-
     def __init__(self, dates, layers=(32, 16, 8), dropout=0.1, weight_decay=1e-4, lr=1e-3, bs=4096,
                  max_epochs=20, patience=3, seeds=5):
         self.dates, self.layers, self.dropout = dates, layers, dropout
@@ -208,12 +178,6 @@ class LSTMNet(nn.Module):
 
 
 class SequenceLSTM:
-    """LSTM over each ticker's last `window` trading days of `sequence_features` (already
-    ranked across tickers, so no further scaling), with `static_features` from the row's own
-    day added at the output layer. The window repeats a ticker's first row when it has less
-    history. Each epoch trains on a fresh sample of `samples_per_epoch` training rows, with
-    early stopping on the validation days; predictions average `seeds` networks."""
-
     def __init__(self, df, sequence_features, static_features, window=60, hidden=32, dropout=0.1, lr=1e-3,
                  weight_decay=0.0, bs=512, samples_per_epoch=200_000, max_epochs=10, patience=2, seeds=3):
         df = df.sort_values(['ticker', 'date'])

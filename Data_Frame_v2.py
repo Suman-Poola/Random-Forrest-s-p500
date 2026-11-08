@@ -1,12 +1,3 @@
-"""Data frame for the improved experiment (Model_Comparison.py --experiment improved).
-
-10 years of daily S&P 500 data from yfinance, with OHLC, sector, market and earnings
-features. Stock-level features are ranked across tickers within each day and scaled to
-[-1, 1]; market-level features are the same for every ticker on a day and are left as
-they are. Models train on 'target', the next-day return minus that day's median next-day
-return, clipped to the day's 1st-99th percentiles; they are scored on 'excess return',
-the same difference unclipped.
-"""
 import io
 import os
 
@@ -30,15 +21,12 @@ SECTORS = ['Communication Services', 'Consumer Discretionary', 'Consumer Staples
            'Health Care', 'Industrials', 'Information Technology', 'Materials', 'Real Estate', 'Utilities']
 SECTOR_FEATURES = [f'sector: {s}' for s in SECTORS]
 FEATURES = RANKED_FEATURES + FLAG_FEATURES + MARKET_FEATURES + SECTOR_FEATURES
-# daily inputs the LSTM reads as a sequence
 SEQUENCE_FEATURES = ['return', 'overnight gap', 'intraday return', 'range', 'relative volume', 'sector-relative return']
 
-# days since the last earnings announcement are capped here, and used when a ticker has none
 MAX_DAYS_SINCE_EARNINGS = 63
 
 
 def constituents():
-    """Current S&P 500 tickers, in yfinance spelling, mapped to their GICS sector (from Wikipedia)."""
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
     html = requests.get(url, headers={'User-Agent': 'QF_Indigo research script'}, timeout=30).text
     table = pd.read_html(io.StringIO(html), attrs={'id': 'constituents'})[0]
@@ -46,8 +34,6 @@ def constituents():
 
 
 def earnings_dates(tickers, path='data/earnings.parquet'):
-    """Every earnings announcement Yahoo lists for each ticker: ticker, time (UTC) and EPS
-    surprise in percent. Downloading takes about a second per ticker, so the result is cached at `path`."""
     if os.path.exists(path):
         return pd.read_parquet(path)
     parts = []
@@ -66,17 +52,10 @@ def earnings_dates(tickers, path='data/earnings.parquet'):
 
 
 def earnings_features(df, earnings, calendar):
-    """Days since the last announcement, its EPS surprise, and whether one lands in the next session.
-
-    An announcement before 16:00 New York time is known at that day's close; a later one
-    from the next trading day's close. Announcement dates are scheduled weeks ahead, so the
-    next-session flag assumes the date (not the result) was known the day before.
-    """
     local = earnings['time'].dt.tz_convert('America/New_York')
     known = local.dt.tz_localize(None).dt.normalize() + pd.to_timedelta((local.dt.hour >= 16).astype(int), unit='D')
     position = np.searchsorted(calendar, known.to_numpy())
     announcements = earnings.assign(day=position)[position < len(calendar)]
-    # some tickers list the same announcement twice; keep the copy with a surprise
     announcements = (announcements.sort_values('surprise', na_position='first')
                      .drop_duplicates(['ticker', 'day'], keep='last').sort_values('day'))
 
